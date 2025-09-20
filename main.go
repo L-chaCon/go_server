@@ -47,8 +47,9 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", healthzHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
-	mux.HandleFunc("POST /api/validate_chirp", validateChirpHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
+	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 
 	server := http.Server{
 		Handler: mux,
@@ -124,19 +125,18 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 	})
 }
 
-func healthzHandler(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(200)
-	w.Write([]byte("OK"))
-}
-
-func validateChirpHandler(w http.ResponseWriter, req *http.Request) {
+func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 
-	type returnVal struct {
-		CleanedBody string `json:"cleaned_body"`
+	type Chirp struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -152,10 +152,60 @@ func validateChirpHandler(w http.ResponseWriter, req *http.Request) {
 		respondWithError(w, 400, "Chirp is too long", nil)
 		return
 	}
-
 	cleanBody := cleanResponse(params.Body)
 
-	respondWithJSON(w, 200, returnVal{CleanedBody: cleanBody})
+	chirp, err := cfg.db.CreateChirp(
+		req.Context(),
+		database.CreateChirpParams{
+			Body:   cleanBody,
+			UserID: params.UserID,
+		},
+	)
+	if err != nil {
+		respondWithError(w, 500, "Not able to creare chirp", err)
+		return
+	}
+
+	respondWithJSON(w, 201, Chirp{
+		ID:        chirp.ID,
+		Body:      chirp.Body,
+		CreatedAt: chirp.CreatedAt.Time,
+		UpdatedAt: chirp.UpdatedAt.Time,
+		UserID:    chirp.UserID,
+	})
+}
+
+func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
+	type Chirp struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+
+	chirps, err := cfg.db.GetChirps(req.Context())
+	if err != nil {
+		respondWithError(w, 500, "Not able to get chirps", err)
+		return
+	}
+	var chirpList []Chirp
+	for _, chirp := range chirps {
+		chirpList = append(chirpList, Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt.Time,
+			UpdatedAt: chirp.UpdatedAt.Time,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		})
+	}
+	respondWithJSON(w, 200, chirpList)
+}
+
+func healthzHandler(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(200)
+	w.Write([]byte("OK"))
 }
 
 func cleanResponse(body string) string {
