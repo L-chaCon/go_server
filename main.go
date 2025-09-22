@@ -50,6 +50,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
+	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.getChirpHandler)
 
 	server := http.Server{
 		Handler: mux,
@@ -200,6 +201,39 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 		})
 	}
 	respondWithJSON(w, 200, chirpList)
+}
+
+func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) {
+	type Chirp struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+	userIDStr := req.PathValue("id")
+	if userIDStr == "" {
+		respondWithError(w, 404, "Missing user ID", nil)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		respondWithError(w, 404, "Incorrect user ID format", err)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirp(req.Context(), userID)
+	if err != nil {
+		respondWithError(w, 404, "Not able to get chirps", err)
+		return
+	}
+	respondWithJSON(w, 200, Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt.Time,
+		UpdatedAt: chirp.UpdatedAt.Time,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	})
 }
 
 func healthzHandler(w http.ResponseWriter, req *http.Request) {
