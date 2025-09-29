@@ -61,6 +61,21 @@ func main() {
 	server.ListenAndServe()
 }
 
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		cfg.fileserverHits.Add(1)
@@ -84,12 +99,12 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
 	if os.Getenv("PLATFORM") != "dev" {
-		w.WriteHeader(403)
+		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	cfg.fileserverHits.Store(0)
 	cfg.db.DeleteAllUsers(req.Context())
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request) {
@@ -98,23 +113,20 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 		Password string `json:"password"`
 	}
 
-	type User struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+	type response struct {
+		User
 	}
 
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(w, 500, "Error decoding parameters", err)
+		respondWithError(w, http.StatusInternalServerError, "Error decoding parameters", err)
 		return
 	}
 	hashPassword, err := auth.HashPassword(params.Password)
 	if err != nil {
-		respondWithError(w, 500, "Error hashing password", err)
+		respondWithError(w, http.StatusInternalServerError, "Error hashing password", err)
 		return
 	}
 
@@ -126,14 +138,16 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 		},
 	)
 	if err != nil {
-		respondWithError(w, 500, "Not able to creare User", err)
+		respondWithError(w, http.StatusInternalServerError, "Not able to creare User", err)
 		return
 	}
-	respondWithJSON(w, 201, User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt.Time,
-		UpdatedAt: user.UpdatedAt.Time,
-		Email:     user.Email.String,
+	respondWithJSON(w, http.StatusCreated, response{
+		User: User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt.Time,
+			UpdatedAt: user.UpdatedAt.Time,
+			Email:     user.Email.String,
+		},
 	})
 }
 
@@ -143,18 +157,15 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 		Password string `json:"password"`
 	}
 
-	type User struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+	type response struct {
+		User
 	}
 
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(w, 500, "Error decoding parameters", err)
+		respondWithError(w, http.StatusCreated, "Error decoding parameters", err)
 		return
 	}
 
@@ -163,17 +174,19 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 		sql.NullString{String: params.Email, Valid: true},
 	)
 	if err != nil {
-		respondWithError(w, 401, "Incorrect email or password", nil)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", nil)
 	}
 	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
 	if err != nil {
-		respondWithError(w, 401, "Incorrect email or password", nil)
+		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", nil)
 	}
-	respondWithJSON(w, 200, User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt.Time,
-		UpdatedAt: user.UpdatedAt.Time,
-		Email:     user.Email.String,
+	respondWithJSON(w, http.StatusOK, response{
+		User: User{
+			ID:        user.ID,
+			CreatedAt: user.CreatedAt.Time,
+			UpdatedAt: user.UpdatedAt.Time,
+			Email:     user.Email.String,
+		},
 	})
 }
 
@@ -183,25 +196,21 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		UserID uuid.UUID `json:"user_id"`
 	}
 
-	type Chirp struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body      string    `json:"body"`
-		UserID    uuid.UUID `json:"user_id"`
+	type response struct {
+		Chirp
 	}
 
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(w, 500, "Error decoding parameters", err)
+		respondWithError(w, http.StatusInternalServerError, "Error decoding parameters", err)
 		return
 	}
 
 	// The body can't be over 140 characters
 	if len(params.Body) > 140 {
-		respondWithError(w, 400, "Chirp is too long", nil)
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long", nil)
 		return
 	}
 	cleanBody := cleanResponse(params.Body)
@@ -214,31 +223,25 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		},
 	)
 	if err != nil {
-		respondWithError(w, 500, "Not able to creare chirp", err)
+		respondWithError(w, http.StatusInternalServerError, "Not able to creare chirp", err)
 		return
 	}
 
-	respondWithJSON(w, 201, Chirp{
-		ID:        chirp.ID,
-		Body:      chirp.Body,
-		CreatedAt: chirp.CreatedAt.Time,
-		UpdatedAt: chirp.UpdatedAt.Time,
-		UserID:    chirp.UserID,
+	respondWithJSON(w, http.StatusCreated, response{
+		Chirp: Chirp{
+			ID:        chirp.ID,
+			Body:      chirp.Body,
+			CreatedAt: chirp.CreatedAt.Time,
+			UpdatedAt: chirp.UpdatedAt.Time,
+			UserID:    chirp.UserID,
+		},
 	})
 }
 
 func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request) {
-	type Chirp struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body      string    `json:"body"`
-		UserID    uuid.UUID `json:"user_id"`
-	}
-
 	chirps, err := cfg.db.GetChirps(req.Context())
 	if err != nil {
-		respondWithError(w, 500, "Not able to get chirps", err)
+		respondWithError(w, http.StatusInternalServerError, "Not able to get chirps", err)
 		return
 	}
 	var chirpList []Chirp
@@ -251,45 +254,43 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 			UserID:    chirp.UserID,
 		})
 	}
-	respondWithJSON(w, 200, chirpList)
+	respondWithJSON(w, http.StatusOK, chirpList)
 }
 
 func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) {
-	type Chirp struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Body      string    `json:"body"`
-		UserID    uuid.UUID `json:"user_id"`
+	type response struct {
+		Chirp
 	}
 	userIDStr := req.PathValue("id")
 	if userIDStr == "" {
-		respondWithError(w, 404, "Missing user ID", nil)
+		respondWithError(w, http.StatusNotFound, "Missing user ID", nil)
 		return
 	}
 	userID, err := uuid.Parse(userIDStr)
 	if err != nil {
-		respondWithError(w, 404, "Incorrect user ID format", err)
+		respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
 		return
 	}
 
 	chirp, err := cfg.db.GetChirp(req.Context(), userID)
 	if err != nil {
-		respondWithError(w, 404, "Not able to get chirps", err)
+		respondWithError(w, http.StatusNotFound, "Not able to get chirps", err)
 		return
 	}
-	respondWithJSON(w, 200, Chirp{
-		ID:        chirp.ID,
-		CreatedAt: chirp.CreatedAt.Time,
-		UpdatedAt: chirp.UpdatedAt.Time,
-		Body:      chirp.Body,
-		UserID:    chirp.UserID,
+	respondWithJSON(w, http.StatusOK, response{
+		Chirp: Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt.Time,
+			UpdatedAt: chirp.UpdatedAt.Time,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		},
 	})
 }
 
 func healthzHandler(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(200)
+	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
 }
 
