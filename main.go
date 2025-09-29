@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/L-chaCon/go_server/internal/auth"
 	"github.com/L-chaCon/go_server/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -48,6 +49,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.getChirpHandler)
@@ -92,7 +94,53 @@ func (cfg *apiConfig) resetHandler(w http.ResponseWriter, req *http.Request) {
 
 func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	type User struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, 500, "Error decoding parameters", err)
+		return
+	}
+	hashPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 500, "Error hashing password", err)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(
+		req.Context(),
+		database.CreateUserParams{
+			Email:          sql.NullString{String: params.Email, Valid: true},
+			HashedPassword: hashPassword,
+		},
+	)
+	if err != nil {
+		respondWithError(w, 500, "Not able to creare User", err)
+		return
+	}
+	respondWithJSON(w, 201, User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt.Time,
+		UpdatedAt: user.UpdatedAt.Time,
+		Email:     user.Email.String,
+	})
+}
+
+func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	type User struct {
@@ -110,15 +158,18 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	user, err := cfg.db.CreateUser(
+	user, err := cfg.db.GetUserByEmail(
 		req.Context(),
 		sql.NullString{String: params.Email, Valid: true},
 	)
 	if err != nil {
-		respondWithError(w, 500, "Not able to creare User", err)
-		return
+		respondWithError(w, 401, "Incorrect email or password", nil)
 	}
-	respondWithJSON(w, 201, User{
+	err = auth.CheckPasswordHash(params.Password, user.HashedPassword)
+	if err != nil {
+		respondWithError(w, 401, "Incorrect email or password", nil)
+	}
+	respondWithJSON(w, 200, User{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt.Time,
 		UpdatedAt: user.UpdatedAt.Time,
