@@ -13,6 +13,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type TokenType string
+
+const TokenTypeAccess TokenType = "chirpy"
+
+var (
+	ErrNoAuthHeader = errors.New("no Authorization in header")
+	ErrToken        = errors.New("invalid Authorization value")
+)
+
 func HashPassword(password string) (string, error) {
 	hashPassword, err := bcrypt.GenerateFromPassword([]byte(password), 1)
 	if err != nil {
@@ -28,7 +37,7 @@ func CheckPasswordHash(password, hash string) error {
 func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (string, error) {
 	claims := &jwt.RegisteredClaims{
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiresIn)),
-		Issuer:    "chirpy",
+		Issuer:    string(TokenTypeAccess),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
 		Subject:   userID.String(),
 	}
@@ -75,19 +84,19 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 }
 
 func GetBearerToken(headers http.Header) (string, error) {
-	bearer := headers.Get("Authorization")
-	if bearer == "" {
-		return "", errors.New("no Authorization in header")
+	authHeader := headers.Get("Authorization")
+	if authHeader == "" {
+		return "", ErrNoAuthHeader
 	}
 
 	const prefix = "Bearer "
-	if !strings.HasPrefix(bearer, prefix) {
-		return "", errors.New("invalid Authorization format")
+	if !strings.HasPrefix(authHeader, prefix) {
+		return "", ErrToken
 	}
 
-	token := strings.TrimPrefix(bearer, prefix)
+	token := strings.TrimPrefix(authHeader, prefix)
 	if token == "" {
-		return "", errors.New("token is empty")
+		return "", ErrToken
 	}
 
 	return token, nil
