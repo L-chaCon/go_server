@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +209,70 @@ func TestMakeJWTAndValidate(t *testing.T) {
 				if id != tt.wantUUID {
 					t.Errorf("ValidateJWT() id = %v, want %v", id, tt.wantUUID)
 				}
+			}
+		})
+	}
+}
+
+func TestGetBearerToken(t *testing.T) {
+	tests := []struct {
+		name          string
+		header        http.Header
+		expectedToken string
+		wantErr       bool
+		sameToken     bool
+	}{
+		{
+			name: "correct token",
+			header: http.Header{
+				"Content-Type":  []string{"application/json; charset=utf-8"},
+				"Authorization": []string{"Bearer this_is_the_token"},
+			},
+			expectedToken: "this_is_the_token",
+			wantErr:       false,
+			sameToken:     true,
+		},
+		{
+			name: "no token present",
+			header: http.Header{
+				"Content-Type": []string{"application/json; charset=utf-8"},
+			},
+			expectedToken: "this_is_the_token",
+			wantErr:       true,
+			sameToken:     false,
+		},
+		{
+			name: "no token present",
+			header: http.Header{
+				"Content-Type":  []string{"application/json; charset=utf-8"},
+				"Authorization": []string{"Bearer this_is_the_token"},
+			},
+			expectedToken: "not_the_same_token",
+			wantErr:       false,
+			sameToken:     false,
+		},
+		{
+			name: "empty Bearer",
+			header: http.Header{
+				"Content-Type":  []string{"application/json; charset=utf-8"},
+				"Authorization": []string{"Bearer "},
+			},
+			expectedToken: "this_is_the_token",
+			wantErr:       true,
+			sameToken:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GetBearerToken(tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetBearerToken() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if (token == tt.expectedToken) != tt.sameToken {
+				t.Errorf("GetBearerToken() token: '%s' != '%s'", token, tt.expectedToken)
+				return
 			}
 		})
 	}

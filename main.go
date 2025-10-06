@@ -22,7 +22,10 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	jwtSecret      string
 }
+
+const EXPIRES_BASE_TIME = 3600
 
 func main() {
 	godotenv.Load()
@@ -34,7 +37,16 @@ func main() {
 	}
 	dbQueries := database.New(db)
 
-	apiCfg := apiConfig{fileserverHits: atomic.Int32{}, db: dbQueries}
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		log.Print("Not jwtSecret found")
+		return
+	}
+	apiCfg := apiConfig{
+		fileserverHits: atomic.Int32{},
+		db:             dbQueries,
+		jwtSecret:      jwtSecret,
+	}
 	mux := http.NewServeMux()
 	mux.Handle(
 		"/app/",
@@ -153,12 +165,14 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	type response struct {
 		User
+		Token string `json:"token"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -180,6 +194,21 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password", nil)
 	}
+
+	expiresIn := params.ExpiresInSeconds
+	if expiresIn <= 0 || expiresIn > 3600 {
+		expiresIn = EXPIRES_BASE_TIME
+	}
+
+	token, err := auth.MakeJWT(
+		user.ID,
+		cfg.jwtSecret,
+		time.Duration(expiresIn)*time.Second,
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating JWT", err)
+	}
+
 	respondWithJSON(w, http.StatusOK, response{
 		User: User{
 			ID:        user.ID,
@@ -187,13 +216,13 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 			UpdatedAt: user.UpdatedAt.Time,
 			Email:     user.Email.String,
 		},
+		Token: token,
 	})
 }
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Body   string    `json:"body"`
-		UserID uuid.UUID `json:"user_id"`
+		Body string `json:"body"`
 	}
 
 	type response struct {
@@ -208,6 +237,19 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		return
 	}
 
+	// Check if th token is correct.
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "No token send", err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Error ValidateJWT", err)
+		return
+	}
+
 	// The body can't be over 140 characters
 	if len(params.Body) > 140 {
 		respondWithError(w, http.StatusBadRequest, "Chirp is too long", nil)
@@ -219,7 +261,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, req *http.Reques
 		req.Context(),
 		database.CreateChirpParams{
 			Body:   cleanBody,
-			UserID: params.UserID,
+			UserID: userID,
 		},
 	)
 	if err != nil {
