@@ -1,3 +1,4 @@
 .lazy.lua
 .env
 endpoints/
+**/.DS_Store
