@@ -466,22 +466,22 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
+	authorID := uuid.Nil
 	authorIDStr := req.URL.Query().Get("author_id")
 	if authorIDStr != "" {
-		userID, err := uuid.Parse(authorIDStr)
+		authorID, err = uuid.Parse(authorIDStr)
 		if err != nil {
 			respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
-			return
-		}
-		chirps, err = cfg.db.GetChirpsForAuthor(req.Context(), userID)
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, "Not able to get chirps", err)
 			return
 		}
 	}
 
 	var chirpList []Chirp
 	for _, chirp := range chirps {
+		if authorID != uuid.Nil && chirp.UserID != authorID {
+			continue
+		}
+
 		chirpList = append(chirpList, Chirp{
 			ID:        chirp.ID,
 			CreatedAt: chirp.CreatedAt.Time,
