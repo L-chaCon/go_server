@@ -465,6 +465,21 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Not able to get chirps", err)
 		return
 	}
+
+	authorIDStr := req.URL.Query().Get("author_id")
+	if authorIDStr != "" {
+		userID, err := uuid.Parse(authorIDStr)
+		if err != nil {
+			respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
+			return
+		}
+		chirps, err = cfg.db.GetChirpsForAuthor(req.Context(), userID)
+		if err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Not able to get chirps", err)
+			return
+		}
+	}
+
 	var chirpList []Chirp
 	for _, chirp := range chirps {
 		chirpList = append(chirpList, Chirp{
