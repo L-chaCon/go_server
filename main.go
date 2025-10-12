@@ -23,11 +23,13 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	jwtSecret      string
+	polkaKey       string
 }
 
 const (
 	ExpiresAccessTokenTime  time.Duration = 60 * 60 * time.Second
 	ExpiresRefreshTokenTime time.Duration = 60 * 24 * time.Hour
+	UserUpdateEvent         string        = "user.upgraded"
 )
 
 func main() {
@@ -45,10 +47,16 @@ func main() {
 		log.Print("Not jwtSecret found")
 		return
 	}
+	polkaKey := os.Getenv("POLKA_KEY")
+	if polkaKey == "" {
+		log.Print("Not polkaKey found")
+		return
+	}
 	apiCfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		db:             dbQueries,
 		jwtSecret:      jwtSecret,
+		polkaKey:       polkaKey,
 	}
 	mux := http.NewServeMux()
 	mux.Handle(
@@ -71,6 +79,8 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.getChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{id}", apiCfg.getChirpHandler)
+	mux.HandleFunc("DELETE /api/chirps/{id}", apiCfg.deleteChirpHandler)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.upgradeUser)
 
 	server := http.Server{
 		Handler: mux,
@@ -80,10 +90,11 @@ func main() {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -161,10 +172,11 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 	}
 	respondWithJSON(w, http.StatusCreated, response{
 		User: User{
-			ID:        user.ID,
-			CreatedAt: user.CreatedAt.Time,
-			UpdatedAt: user.UpdatedAt.Time,
-			Email:     user.Email.String,
+			ID:          user.ID,
+			CreatedAt:   user.CreatedAt.Time,
+			UpdatedAt:   user.UpdatedAt.Time,
+			Email:       user.Email.String,
+			IsChirpyRed: user.IsChirpyRed,
 		},
 	})
 }
@@ -220,10 +232,58 @@ func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request
 
 	respondWithJSON(w, http.StatusOK, response{
 		User: User{
-			ID:    user.ID,
-			Email: user.Email.String,
+			ID:          user.ID,
+			Email:       user.Email.String,
+			IsChirpyRed: user.IsChirpyRed,
 		},
 	})
+}
+
+func (cfg *apiConfig) upgradeUser(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Event string            `json:"event"`
+		Data  map[string]string `json:"data"`
+	}
+	type response struct {
+		User
+	}
+
+	// Check polka key
+	apiKey, err := auth.GetAPIKey(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Error getting the apiKey", err)
+		return
+	}
+
+	if cfg.polkaKey != apiKey {
+		respondWithError(w, http.StatusUnauthorized, "Not the same apiKey for polka", err)
+		return
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err = decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error decoding parameters", err)
+		return
+	}
+
+	if params.Event != UserUpdateEvent {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	userID, err := uuid.Parse(params.Data["user_id"])
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
+		return
+	}
+	err = cfg.db.UpgradeUser(req.Context(), userID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Not able to upgrade user", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
@@ -281,10 +341,11 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, req *http.Request) {
 
 	respondWithJSON(w, http.StatusOK, response{
 		User: User{
-			ID:        user.ID,
-			CreatedAt: user.CreatedAt.Time,
-			UpdatedAt: user.UpdatedAt.Time,
-			Email:     user.Email.String,
+			ID:          user.ID,
+			CreatedAt:   user.CreatedAt.Time,
+			UpdatedAt:   user.UpdatedAt.Time,
+			Email:       user.Email.String,
+			IsChirpyRed: user.IsChirpyRed,
 		},
 		Token:        token,
 		RefreshToken: refreshToken.Token,
@@ -421,18 +482,18 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) 
 	type response struct {
 		Chirp
 	}
-	userIDStr := req.PathValue("id")
-	if userIDStr == "" {
+	chirpIDStr := req.PathValue("id")
+	if chirpIDStr == "" {
 		respondWithError(w, http.StatusNotFound, "Missing user ID", nil)
 		return
 	}
-	userID, err := uuid.Parse(userIDStr)
+	chirpID, err := uuid.Parse(chirpIDStr)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
 		return
 	}
 
-	chirp, err := cfg.db.GetChirp(req.Context(), userID)
+	chirp, err := cfg.db.GetChirp(req.Context(), chirpID)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, "Not able to get chirps", err)
 		return
@@ -446,6 +507,53 @@ func (cfg *apiConfig) getChirpHandler(w http.ResponseWriter, req *http.Request) 
 			UserID:    chirp.UserID,
 		},
 	})
+}
+
+func (cfg *apiConfig) deleteChirpHandler(w http.ResponseWriter, req *http.Request) {
+	// Check if th token is correct.
+	token, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "No token send", err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Error ValidateJWT", err)
+		return
+	}
+
+	// get chirp
+	chirpIDStr := req.PathValue("id")
+	if chirpIDStr == "" {
+		respondWithError(w, http.StatusNotFound, "Missing user ID", nil)
+		return
+	}
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Incorrect user ID format", err)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirp(req.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Not able to get chirps", err)
+		return
+	}
+
+	if chirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "Not your chirp", err)
+		return
+	}
+
+	// Delete chirp
+	err = cfg.db.DeleteChirp(req.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Not able to get chirps", err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func healthzHandler(w http.ResponseWriter, req *http.Request) {
