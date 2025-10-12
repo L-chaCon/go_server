@@ -64,6 +64,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.metricsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.resetHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.createUserHandler)
+	mux.HandleFunc("PUT /api/users", apiCfg.updateUserHandler)
 	mux.HandleFunc("POST /api/login", apiCfg.loginHandler)
 	mux.HandleFunc("POST /api/refresh", apiCfg.refreshHandler)
 	mux.HandleFunc("POST /api/revoke", apiCfg.revokeHandler)
@@ -164,6 +165,63 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, req *http.Request
 			CreatedAt: user.CreatedAt.Time,
 			UpdatedAt: user.UpdatedAt.Time,
 			Email:     user.Email.String,
+		},
+	})
+}
+
+func (cfg *apiConfig) updateUserHandler(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	type response struct {
+		User
+	}
+
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error decoding parameters", err)
+		return
+	}
+
+	accessToken, err := auth.GetBearerToken(req.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "No token send", err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(accessToken, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Error ValidateJWT", err)
+		return
+	}
+
+	hashPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error hashing password", err)
+		return
+	}
+
+	user, err := cfg.db.UpdateUser(req.Context(), database.UpdateUserParams{
+		ID:             userID,
+		HashedPassword: hashPassword,
+		Email: sql.NullString{
+			String: params.Email,
+			Valid:  true,
+		},
+	})
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Error finding user", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, response{
+		User: User{
+			ID:    user.ID,
+			Email: user.Email.String,
 		},
 	})
 }
