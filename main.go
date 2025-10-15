@@ -490,6 +490,17 @@ func (cfg *apiConfig) getChirpsHandler(w http.ResponseWriter, req *http.Request)
 			UserID:    chirp.UserID,
 		})
 	}
+
+	isSorted := req.URL.Query().Get("sort")
+	if isSorted == "desc" {
+		for i, j := 0, len(chirpList)-1; i < j; {
+			chirpList[i], chirpList[j] = chirpList[j], chirpList[i]
+			i++
+			j--
+		}
+		respondWithJSON(w, http.StatusOK, chirpList)
+		return
+	}
 	respondWithJSON(w, http.StatusOK, chirpList)
 }
 
